@@ -46,14 +46,12 @@ mod tests {
         let (mut conn1, _) = tt::connect_async(&ws_url).await.unwrap();
         let (mut conn2, _) = tt::connect_async(&ws_url).await.unwrap();
 
-        assert_playlist_resp(
-            &rest_url,
-            PlaylistResponse {
-                name: String::from(playlist),
-                user_count: 2,
-            },
-        )
-        .await;
+        let resp = get_playlist(&rest_url).await;
+        let expected = PlaylistResponse {
+            name: String::from(playlist),
+            user_count: 2,
+        };
+        assert_eq!(expected, resp);
 
         let test_msg = ws::Message::text("Hello, from user 1!");
         conn1.send(test_msg.clone()).await.unwrap();
@@ -65,18 +63,25 @@ mod tests {
 
         conn2.close(None).await.unwrap();
 
-        assert_playlist_resp(
-            &rest_url,
-            PlaylistResponse {
-                name: String::from(playlist),
-                user_count: 1,
-            },
-        )
-        .await;
+        let resp = get_playlist(&rest_url).await;
+        let expected = PlaylistResponse {
+            name: String::from(playlist),
+            user_count: 1,
+        };
+        assert_eq!(expected, resp);
 
         let test_msg = ws::Message::text("User 2 left. Now its just me :(");
         conn1.send(test_msg.clone()).await.unwrap();
         assert_recv(&mut [&mut conn1], &test_msg).await;
+
+        conn1.close(None).await.unwrap();
+
+        let resp = get_playlist(&rest_url).await;
+        let expected = PlaylistResponse {
+            name: String::from(playlist),
+            user_count: 0,
+        };
+        assert_eq!(expected, resp);
     }
 
     #[tokio::test()]
@@ -160,12 +165,6 @@ mod tests {
     async fn get_playlist(url: &str) -> PlaylistResponse {
         let resp = http_get_read_all(url).await;
         serde_json::from_str(&resp).unwrap()
-    }
-
-    async fn assert_playlist_resp(url: &str, expected: PlaylistResponse) {
-        let resp = http_get_read_all(url).await;
-        let resp: PlaylistResponse = serde_json::from_str(&resp).unwrap();
-        assert_eq!(expected, resp);
     }
 
     async fn http_get_read_all(url: &str) -> String {
