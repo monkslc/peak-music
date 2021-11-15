@@ -79,6 +79,66 @@ mod tests {
         assert_recv(&mut [&mut conn1], &test_msg).await;
     }
 
+    #[tokio::test()]
+    async fn multi_playlist() {
+        let playlist_a = "a";
+        let playlist_b = "b";
+        let addr = next_addr();
+        tokio::spawn(start(addr));
+
+        let ws_url_a = format_ws_url(addr, playlist_a);
+        let ws_url_b = format_ws_url(addr, playlist_b);
+        let rest_url_a = format_rest_url(addr, playlist_a);
+        let rest_url_b = format_rest_url(addr, playlist_b);
+
+        let (mut conn_a1, _) = tt::connect_async(&ws_url_a).await.unwrap();
+        let (mut conn_a2, _) = tt::connect_async(&ws_url_a).await.unwrap();
+        let (mut conn_b1, _) = tt::connect_async(&ws_url_b).await.unwrap();
+
+        let resp = get_playlist(&rest_url_a).await;
+        let expected = PlaylistResponse {
+            name: String::from(playlist_a),
+            user_count: 2,
+        };
+        assert_eq!(expected, resp);
+
+        let resp = get_playlist(&rest_url_b).await;
+        let expected = PlaylistResponse {
+            name: String::from(playlist_b),
+            user_count: 1,
+        };
+        assert_eq!(expected, resp);
+
+        let test_msg = ws::Message::text("Hey!");
+        conn_a1.send(test_msg.clone()).await.unwrap();
+        assert_recv(&mut [&mut conn_a1, &mut conn_a2], &test_msg).await;
+        assert_not_recv(&mut [&mut conn_b1]).await;
+
+        conn_a1.close(None).await.unwrap();
+        let resp = get_playlist(&rest_url_a).await;
+        let expected = PlaylistResponse {
+            name: String::from(playlist_a),
+            user_count: 1,
+        };
+        assert_eq!(expected, resp);
+
+        conn_a2.close(None).await.unwrap();
+        let resp = get_playlist(&rest_url_a).await;
+        let expected = PlaylistResponse {
+            name: String::from(playlist_a),
+            user_count: 0,
+        };
+        assert_eq!(expected, resp);
+
+        conn_b1.close(None).await.unwrap();
+        let resp = get_playlist(&rest_url_b).await;
+        let expected = PlaylistResponse {
+            name: String::from(playlist_b),
+            user_count: 0,
+        };
+        assert_eq!(expected, resp);
+    }
+
     async fn assert_recv(clients: &mut [&mut ClientConnection], expected: &ws::Message) {
         for conn in clients {
             let msg = tokio::time::timeout(Duration::from_secs(10), conn.next())
@@ -88,6 +148,18 @@ mod tests {
                 .unwrap();
             assert_eq!(*expected, msg);
         }
+    }
+
+    async fn assert_not_recv(clients: &mut [&mut ClientConnection]) {
+        for conn in clients {
+            let resp = tokio::time::timeout(Duration::from_secs(3), conn.next()).await;
+            assert!(resp.is_err());
+        }
+    }
+
+    async fn get_playlist(url: &str) -> PlaylistResponse {
+        let resp = http_get_read_all(url).await;
+        serde_json::from_str(&resp).unwrap()
     }
 
     async fn assert_playlist_resp(url: &str, expected: PlaylistResponse) {

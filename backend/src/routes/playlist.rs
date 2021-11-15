@@ -3,6 +3,8 @@ use futures::{
     SinkExt, StreamExt,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, oneshot};
 use warp::{ws, Filter};
 
@@ -20,23 +22,46 @@ pub struct PlaylistResponse {
 }
 
 pub fn route() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    let (pl_tx, _) = broadcast::channel::<ws::Message>(20);
-    let pl_tx_rest = pl_tx.clone();
+    let playlist_map = Arc::new(RwLock::new(HashMap::<String, PlaylistTx>::new()));
+    let playlist_map_rest = Arc::clone(&playlist_map);
 
     let playlist_base = warp::path!("playlists" / String);
 
     let playlist_ws = playlist_base
+        .map(move |playlist: String| {
+            let map = playlist_map.read().unwrap();
+            let pl_tx = if let Some(pl_tx) = map.get(&playlist) {
+                pl_tx.clone()
+            } else {
+                drop(map);
+                // TODO: Make sure that this won't be perpetually locked by readers coming in
+                let mut map = playlist_map.write().unwrap();
+                let pl_tx = map
+                    .entry(playlist.clone())
+                    .or_insert_with(|| broadcast::channel::<ws::Message>(20).0);
+                pl_tx.clone()
+            };
+
+            (playlist, pl_tx)
+        })
         .and(warp::ws())
-        .and(warp::any().map(move || pl_tx.clone()))
-        .map(|playlist, ws: ws::Ws, pl_tx| ws.on_upgrade(|ws| user_connected(ws, playlist, pl_tx)));
+        .map(|(playlist, pl_tx), ws: ws::Ws| {
+            ws.on_upgrade(|ws| user_connected(ws, playlist, pl_tx))
+        });
 
     let playlist_rest = playlist_base
-        .and(warp::get().map(move || pl_tx_rest.clone()))
-        .map(|playlist, pl_tx: PlaylistTx| {
-            let resp = PlaylistResponse {
-                name: playlist,
-                user_count: pl_tx.receiver_count(),
-            };
+        .and(warp::get())
+        .map(move |playlist: String| {
+            let map = playlist_map_rest.read().unwrap();
+            let user_count = map
+                .get(&playlist)
+                .map(|pl_tx| pl_tx.receiver_count())
+                .unwrap_or(0);
+
+            (playlist, user_count)
+        })
+        .map(|(name, user_count): (String, usize)| {
+            let resp = PlaylistResponse { name, user_count };
             serde_json::to_string(&resp).unwrap()
         });
 
@@ -88,6 +113,7 @@ async fn user_to_playlist(mut user_rx: UserRx, pl_tx: PlaylistTx, close_tx: Clos
     }
 
     if pl_tx.receiver_count() == 1 {
+        // TODO: Close the channel
         println!("This is the last user. We should drop the playlist");
     }
 
