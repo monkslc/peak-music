@@ -3,6 +3,7 @@ name = "peakmusic"
 version = "0.1.0"
 authors = ["monkslc <monkslc@gmail.com>"]
 edition = "2018"
+default-run = "peak-music"
 
 [dependencies]
 futures = "0.3.17"

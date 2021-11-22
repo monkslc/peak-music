@@ -1,6 +1,5 @@
 import { Construct, Stack, StackProps } from "@aws-cdk/core";
 import {
-    AmazonLinuxCpuType,
     AmazonLinuxGeneration,
     CfnEIP,
     CfnEIPAssociation,
@@ -58,9 +57,8 @@ export class MainStack extends Stack {
             role: backendRunner,
             securityGroup: sg,
             instanceName: "Backend Server",
-            instanceType: new InstanceType("t4g.nano"),
+            instanceType: new InstanceType("t3.nano"),
             machineImage: MachineImage.latestAmazonLinux({
-                cpuType: AmazonLinuxCpuType.ARM_64,
                 generation: AmazonLinuxGeneration.AMAZON_LINUX_2,
             }),
             keyName: "peak-admin-key",
